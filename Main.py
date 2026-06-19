@@ -1,15 +1,31 @@
-from langchain.agents import create_agent
-from langchain.tools import tool
+import wikipedia
+from langchain import agents,tools
+from langchain_core.runnables import RunnableLambda, RunnableSequence
+from langchain_ollama import ChatOllama
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage,AIMessage
+from langchain_community.tools import ReadFileTool, YouTubeSearchTool
+from langchain_community.tools.wikipedia.tool import *
+from langchain_community.agent_toolkits.steam.toolkit import SteamToolkit 
 from typing import List, Dict
 from PySide6.QtWidgets import *
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QColor, QMouseEvent, QClipboard,QGuiApplication
-import wikipedia
-from langchain_community.tools.wikipedia.tool import*
-from langchain_community.tools import YouTubeSearchTool
+from markdown2 import markdown
 
 
 wikipedia.set_user_agent("Test (danielballardboquet01@gmail.com)")
+
+def Calculate_tools(m :AIMessage, messages,t):
+    if m.tool_calls != None:
+        messages.append(m)
+        for tool in m.tool_calls:
+            for ftool in t:
+                if ftool.name == tool["name"]:
+                    messages.append(ftool.invoke(tool))
+    
+        return messages
+    else:
+        return None
 
 api_wrapper = WikipediaAPIWrapper(
     top_k_results=1,
@@ -19,12 +35,13 @@ wiki_tool = WikipediaQueryRun(api_wrapper=api_wrapper)
 
 Tools = [
         {"Tool_name": "Wikipedia Tool", "Tool": wiki_tool, "Active": True},
-        {"Tool_name": "Youtube Search", "Tool": YouTubeSearchTool, "Active": True},
+        {"Tool_name": "Youtube Search", "Tool": YouTubeSearchTool(), "Active": True},
     ]
 
 
 class Message(QLabel):
     def __init__(self,text, color, Text_color = "black", font_size = 12, font_name = ""):
+        text = markdown(text)
         super().__init__(text=text)
         self.setStyleSheet(f"background-color:{color}; color: {Text_color}; font-size: {font_size}; border-radius:10px; padding:20px")
         self.setWordWrap(True)
@@ -123,6 +140,7 @@ class Menu(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+
         self.i = 0
         self.AI_color = QColor(255,0,0)
         self.User_color = QColor(0,0,255)
@@ -131,9 +149,28 @@ class MainWindow(QMainWindow):
         self.font_size = 12
 
         self.CreateMenu()
+        self.create_widgets()
 
         self.setWindowTitle("Ai Chatting")
 
+        self.tools_list = []
+
+        for i in Tools:
+            if i["Active"]:
+                self.tools_list.append(i["Tool"])
+        self.messagess = [SystemMessage("You are a AI assistant")]
+        llm = ChatOllama(model="gemma4:e4b",temperature=0.8,verbose=True, reasoning=True).bind_tools(self.tools_list)
+
+        first_step = RunnableLambda(lambda x : llm.invoke(x))
+        tool_step = RunnableLambda(lambda x : Calculate_tools(x,self.messagess,self.tools_list))
+        tool_invoke_step = RunnableLambda(lambda x : llm.invoke(x) if x != None else x[-1])
+        append_step = RunnableLambda(lambda x: self.messagess.append(x))
+        output_step = RunnableLambda(lambda x : self.messagess[-1].content)
+
+        self.chain = first_step | tool_step | tool_invoke_step | append_step |output_step
+
+
+    def create_widgets(self): 
         self.cenWidget = QWidget()
         self.lay = QVBoxLayout()
         self.setCentralWidget(self.cenWidget)
@@ -162,19 +199,6 @@ class MainWindow(QMainWindow):
 
         self.lay.addWidget(self.edit)
 
-        tools_list = []
-
-        for i in Tools:
-            if i["Active"]:
-                tools_list.append(i["Tool"])
-        print(tools_list)
-
-
-        self.agent = create_agent(
-        model="ollama:gemma4:e4b",
-        tools=[wiki_tool],
-        system_prompt="You are a helpful assistant",
-        )
 
     def CreateMenu(self):
         mb = self.menuBar()
@@ -235,10 +259,11 @@ class MainWindow(QMainWindow):
         self.prompt["messages"].append({"role":"user", "content": text})
 
         try:
-            result = self.agent.invoke(self.prompt)
+            self.messagess.append(HumanMessage(text))
+            output = self.chain.invoke(self.messagess)
 
-            self.prompt["messages"].append({"role":"system", "content": result["messages"][-1].content})
-            self.messages.addWidget(Message(result["messages"][-1].content,self.AI_color.name(),self.Text_color.name(),self.font_size, self.font),self.i,1)
+            self.prompt["messages"].append({"role":"system", "content": output})
+            self.messages.addWidget(Message(output,self.AI_color.name(),self.Text_color.name(),self.font_size, self.font),self.i,1)
             self.i+=1
         except:
             self.messages.addWidget(Message("Error",self.AI_color.name(),self.Text_color.name(),self.font_size, self.font),self.i,1)
@@ -251,8 +276,3 @@ m = MainWindow()
 m.show()
 
 app.exec()
-#result = agent.invoke(
-#    {"messages": [{"role": "user", "content": "What is the result of the operation ((1+7+3)*6+7)/12"}]}
-#)
-
-#print(result["messages"][-1].content)
