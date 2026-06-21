@@ -177,6 +177,46 @@ class Menu(QDialog):
         
         return self.wfont_size.value(), self.bFont, self.bAI_color, self.bUser_color, self.bText_color
 
+class Tool_menu(QDialog):
+    def __init__(self, tools):
+        super().__init__()
+        self.setWindowTitle("Tools")
+
+        self.tools = tools
+
+        self.apply = True
+
+        self.lay = QGridLayout()
+        self.setLayout(self.lay)
+
+        for i,tool in enumerate(self.tools):
+
+            Hlay = QHBoxLayout()
+            label = QLabel(tool["Tool_name"])
+            qcheck = QCheckBox()
+            bool = tool["Active"]
+            qcheck.setChecked(bool)
+
+            self.lay.addWidget(label,i,0)
+            self.lay.addWidget(qcheck,i,1)
+        
+        self.apply = QPushButton("Apply")
+        self.Cancel = QPushButton("Cancel")
+
+        self.lay.addWidget(self.Cancel,i+1,0)
+        self.lay.addWidget(self.apply,i+1,1)
+        
+    def exec(self):
+        super().exec()
+        if self.apply:
+            for i,tool in enumerate(self.tools):
+                tool["Active"] = self.lay.itemAtPosition(i,1).widget().isChecked()
+            
+            return self.tools
+        
+        else:
+            return self.tools
+        
 class MainWindow(QMainWindow):
     Mes_Sig = Signal(str)
     
@@ -185,6 +225,8 @@ class MainWindow(QMainWindow):
 
         self.i = 0
         self.settings = {}
+        self.model = "gemma4:e4b"
+        self.Tools = Tools
 
         self.Mes_Sig.connect(self.add_message)
 
@@ -200,7 +242,7 @@ class MainWindow(QMainWindow):
 
         self.tools_list = []
 
-        for i in Tools:
+        for i in self.Tools:
             if i["Active"]:
                 self.tools_list.append(i["Tool"])
 
@@ -215,7 +257,7 @@ class MainWindow(QMainWindow):
 
         #Create LLM and Chain
 
-        self.llm = ChatOllama(model="gemma4:e4b",temperature=0.8,verbose=True, reasoning=True, num_predict=1028).bind_tools(self.tools_list)
+        self.llm = ChatOllama(model=self.model,temperature=0.8,verbose=True, reasoning=True, num_predict=1028).bind_tools(self.tools_list)
 
         first_step = RunnableLambda(lambda x : self.llm.invoke(x))
         tool_step = RunnableLambda(lambda x : Calculate_tools(x,self.messagess,self.tools_list))
@@ -308,6 +350,9 @@ class MainWindow(QMainWindow):
         menu = mb.addMenu("Advance Settings")
         menu.addAction(add_tool)
 
+        Load.triggered.connect(self.Load)
+        Save.triggered.connect(self.Save)
+        Tools.triggered.connect(self.tool_menu)
         LLM.triggered.connect(self.LLM_settings)
         C_Setting.triggered.connect(self.Color_settings)
         Clear.triggered.connect(self.Clear_chat)
@@ -387,16 +432,71 @@ class MainWindow(QMainWindow):
 
     def generate(self,text):
         try:
-            self.messagess.append(HumanMessage(text))
-            output = self.chain.invoke(self.messagess)
+            while True:
+                self.messagess.append(HumanMessage(text))
+                output = self.chain.invoke(self.messagess)
 
-            self.prompt["messages"].append({"role":"system", "content": output})
+                self.prompt["messages"].append({"role":"system", "content": output})
+                if output != "":
+                    break
         except:
             output = "Error"
 
         self.edit.setDisabled(False)
         self.Mes_Sig.emit(output)
 
+    def tool_menu(self):
+        t = Tool_menu(Tools)
+        self.Tools = t.exec()
+
+        self.tools_list = []
+
+        for i in self.Tools:
+            if i["Active"]:
+                self.tools_list.append(i["Tool"])
+    
+        self.llm = ChatOllama(model=self.model,temperature=0.8,verbose=True, reasoning=True, num_predict=1028).bind_tools(self.tools_list)
+
+        first_step = RunnableLambda(lambda x : self.llm.invoke(x))
+        tool_step = RunnableLambda(lambda x : Calculate_tools(x,self.messagess,self.tools_list))
+        tool_invoke_step = RunnableLambda(lambda x : self.llm.invoke(x) if x != None else x[-1])
+        append_step = RunnableLambda(lambda x: self.messagess.append(x))
+        output_step = RunnableLambda(lambda x : self.messagess[-1].content)
+
+        self.chain = first_step | tool_step | tool_invoke_step | append_step |output_step
+
+    def Save(self):
+        URL = QFileDialog.getSaveFileName()[0]
+        if URL != "":
+            mess = []
+            for m in self.messagess:
+                mess.append({"Type": str(type(m)),"content":m.content})
+            
+            with open(URL, "+w") as f:
+                f.write(json.dumps(mess))
+    
+    def Load(self):
+        URL = QFileDialog.getOpenFileName()[0]
+        if URL != "":
+            with open(URL, "r") as f:
+                mess = json.loads(f.read())
+        
+        self.messagess = []
+        self.i = 0
+        for m in mess:
+            if m["Type"] == "<class 'langchain_core.messages.human.HumanMessage'>":
+                File =HumanMessage(m["content"])
+                self.messages.addWidget(Message(m["content"],self.User_color.name(),self.Text_color.name(),self.font_size, self.font),self.i,0)
+                self.i += 1
+            elif m["Type"] == "<class 'langchain_core.messages.ai.AIMessage'>":
+                File = AIMessage(m["content"])
+                self.messages.addWidget(Message(m["content"],self.AI_color.name(),self.Text_color.name(),self.font_size, self.font),self.i,1)
+                self.i += 1
+            else:
+                File = SystemMessage(m["content"])
+            
+            self.messagess.append(File)
+    
     @Slot(str)
     def add_message(self,output : str):
         self.messages.addWidget(Message(output,self.AI_color.name(),self.Text_color.name(),self.font_size, self.font),self.i,1)
