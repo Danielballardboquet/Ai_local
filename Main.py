@@ -8,12 +8,14 @@ from langchain_community.tools.wikipedia.tool import *
 from langchain_community.agent_toolkits.steam.toolkit import SteamToolkit 
 from typing import List, Dict
 from PySide6.QtWidgets import *
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Slot, Signal
 from PySide6.QtGui import QAction, QColor, QMouseEvent, QClipboard,QGuiApplication
 from markdown2 import markdown
-
-
-wikipedia.set_user_agent("Test (danielballardboquet01@gmail.com)")
+from Tools.Tools import Tools
+import json
+import threading
+import os
+import subprocess
 
 def Calculate_tools(m :AIMessage, messages,t):
     if m.tool_calls != None:
@@ -27,18 +29,6 @@ def Calculate_tools(m :AIMessage, messages,t):
     else:
         return None
 
-api_wrapper = WikipediaAPIWrapper(
-    top_k_results=1,
-    doc_content_chars_max=1000
-)
-wiki_tool = WikipediaQueryRun(api_wrapper=api_wrapper)
-
-Tools = [
-        {"Tool_name": "Wikipedia Tool", "Tool": wiki_tool, "Active": True},
-        {"Tool_name": "Youtube Search", "Tool": YouTubeSearchTool(), "Active": True},
-    ]
-
-
 class Message(QLabel):
     def __init__(self,text, color, Text_color = "black", font_size = 12, font_name = ""):
         text = markdown(text)
@@ -47,14 +37,66 @@ class Message(QLabel):
         self.setWordWrap(True)
         self.setSizePolicy(QSizePolicy.Preferred,QSizePolicy.Fixed)
         self.clip = QGuiApplication.clipboard()
+        self.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
     def mousePressEvent(self, ev: QMouseEvent ):
         if ev.button() == Qt.RightButton:
             self.clip.setText(self.text())
-        
+
+class LLM_Menu(QDialog):
+    def __init__(self):
+        super().__init__()
+        self.apply = False
+        self.grid = QGridLayout()
+        self.setLayout(self.grid)
+        self.models = ["deepseek-r1:latest",
+                       "deepseek-r1:1.5b",
+                       "deepseek-r1:7b",
+                       "deepseek-r1:8b",
+                       "deepseek-r1:14b",
+                       "deepseek-r1:32b"]
+        self.combo = QComboBox()
+        self.combo.addItems(self.models)
+
+        self.temperature = QSpinBox()
+        self.temperature.setMaximum(100)
+        self.temperature.setMinimum(0)
+        self.temperature.setValue(80)
+
+        self.model_name = QLabel("Model Name")
+        self.tmp_label = QLabel("Temperature")
+
+        self.apply = QPushButton("Apply")
+        self.Quit = QPushButton("Quit")
+
+        self.grid.addWidget(self.model_name,0,0)
+        self.grid.addWidget(self.combo,0,1)
+
+        self.grid.addWidget(self.tmp_label,1,0)
+        self.grid.addWidget(self.temperature,1,1)
+
+        self.grid.addWidget(self.apply,2,0)
+        self.grid.addWidget(self.Quit,2,1)
+
+        self.apply.clicked.connect(self.app)
+        self.Quit.clicked.connect(self.close)
+
+    def app(self):
+        self.apply = True
+        self.close()
+
+    def exec(self):
+        super().exec()
+
+        if self.apply:
+            return self.models[self.combo.currentIndex()], self.temperature.value()
+        else:
+            return None, None
 
 class Menu(QDialog):
     def __init__(self, Font_size:int, Font:str, AI_color : QColor, User_color : QColor, Text_color : QColor):
         super().__init__()
+        self.setWindowTitle("Preferences")
         self.lay = QGridLayout()
         self.apply_bool = False
 
@@ -135,40 +177,82 @@ class Menu(QDialog):
         
         return self.wfont_size.value(), self.bFont, self.bAI_color, self.bUser_color, self.bText_color
 
-        
-
 class MainWindow(QMainWindow):
+    Mes_Sig = Signal(str)
+    
     def __init__(self):
         super().__init__()
 
         self.i = 0
-        self.AI_color = QColor(255,0,0)
-        self.User_color = QColor(0,0,255)
-        self.Text_color = QColor(0,0,0)
-        self.font = ""
-        self.font_size = 12
+        self.settings = {}
 
+        self.Mes_Sig.connect(self.add_message)
+
+        #Create Widgets
+
+        self.load_setting()
         self.CreateMenu()
         self.create_widgets()
 
         self.setWindowTitle("Ai Chatting")
+
+        #Tools and prompts
 
         self.tools_list = []
 
         for i in Tools:
             if i["Active"]:
                 self.tools_list.append(i["Tool"])
-        self.messagess = [SystemMessage("You are a AI assistant")]
-        llm = ChatOllama(model="gemma4:e4b",temperature=0.8,verbose=True, reasoning=True).bind_tools(self.tools_list)
 
-        first_step = RunnableLambda(lambda x : llm.invoke(x))
+        self.sys_prompt = "You are a AI assistant"
+        try: 
+            with open("Custom_prompt.txt","r") as f:
+                self.sys_prompt += "Custom prompt:" + f.read()
+        except:
+            None
+
+        self.messagess = [SystemMessage(self.sys_prompt)]
+
+        #Create LLM and Chain
+
+        self.llm = ChatOllama(model="gemma4:e4b",temperature=0.8,verbose=True, reasoning=True, num_predict=1028).bind_tools(self.tools_list)
+
+        first_step = RunnableLambda(lambda x : self.llm.invoke(x))
         tool_step = RunnableLambda(lambda x : Calculate_tools(x,self.messagess,self.tools_list))
-        tool_invoke_step = RunnableLambda(lambda x : llm.invoke(x) if x != None else x[-1])
+        tool_invoke_step = RunnableLambda(lambda x : self.llm.invoke(x) if x != None else x[-1])
         append_step = RunnableLambda(lambda x: self.messagess.append(x))
         output_step = RunnableLambda(lambda x : self.messagess[-1].content)
 
         self.chain = first_step | tool_step | tool_invoke_step | append_step |output_step
 
+    def load_setting(self):
+
+        try:
+            with open("settings.json","r") as f:
+                settings = json.loads(f.read())
+            
+                self.AI_color = QColor(settings["AI_color"])
+                self.User_color = QColor(settings["User_Color"])
+                self.Text_color = QColor(settings["text_color"])
+                self.font = settings["font"]
+                self.font_size = settings["font_size"]
+        except:
+            settings = {}
+
+            self.AI_color = QColor(255,0,0)
+            self.User_color = QColor(0,0,255)
+            self.Text_color = QColor(0,0,0)
+            self.font = ""
+            self.font_size = 12
+
+    def closeEvent(self, event):
+        self.settings["User_Color"] = self.User_color.name()
+        self.settings["text_color"] = self.Text_color.name()
+        self.settings["font"] = self.font
+        self.settings["font_size"] = self.font_size
+        self.settings["AI_color"] = self.AI_color.name()
+        with open("settings.json", "w") as f:
+            print(f.write(json.dumps(self.settings)))
 
     def create_widgets(self): 
         self.cenWidget = QWidget()
@@ -199,7 +283,6 @@ class MainWindow(QMainWindow):
 
         self.lay.addWidget(self.edit)
 
-
     def CreateMenu(self):
         mb = self.menuBar()
         Save = QAction("Save", self)
@@ -219,19 +302,23 @@ class MainWindow(QMainWindow):
         menu.addAction(C_Setting)
         menu.addAction(Clear)
 
+
         add_tool = QAction("Add Tool", self)
 
         menu = mb.addMenu("Advance Settings")
         menu.addAction(add_tool)
 
+        LLM.triggered.connect(self.LLM_settings)
         C_Setting.triggered.connect(self.Color_settings)
         Clear.triggered.connect(self.Clear_chat)
     
+    def contextMenuEvent(self, event):
+        None
+         
     def Color_settings(self):
 
         m = Menu(24,self.font,self.AI_color,self.User_color,self.Text_color)
         self.font_size, self.font , self.AI_color, self.User_color, self.Text_color = m.exec()
-        print(self.font_size)
         count = self.messages.rowCount()
         k = 0
         for i in range(count):
@@ -246,30 +333,74 @@ class MainWindow(QMainWindow):
             k += 1
             k = k%2
 
-
     def Clear_chat(self):
         self.prompt["messages"] = []
         self.i = 0
 
+    def LLM_settings(self):
+        menu = LLM_Menu()
+        LLM_model, temperature = menu.exec()
+
+        if LLM_model != None and temperature != None:
+            try:
+                self.llm = ChatOllama(model=LLM_model,temperature=temperature/100,verbose=True, reasoning=True, validate_model_on_init=True,num_predict=1028).bind_tools(self.tools_list)
+
+                first_step = RunnableLambda(lambda x : self.llm.invoke(x))
+                tool_step = RunnableLambda(lambda x : Calculate_tools(x,self.messagess,self.tools_list))
+                tool_invoke_step = RunnableLambda(lambda x : self.llm.invoke(x) if x != None else x[-1])
+                append_step = RunnableLambda(lambda x: self.messagess.append(x))
+                output_step = RunnableLambda(lambda x : self.messagess[-1].content)
+
+                self.chain = first_step | tool_step | tool_invoke_step | append_step |output_step
+
+            except:
+                dial = QMessageBox()
+                dial.setWindowTitle("Continue")
+                dial.setText("You need to download the model")
+                dial.setStandardButtons(QMessageBox.Cancel | QMessageBox.Ok)
+                dial.setIcon(QMessageBox.Warning)
+                exe = dial.exec()
+                
+                if exe == QMessageBox.Ok:
+                    os.system(f"ollama pull {LLM_model}")
+                    self.llm = ChatOllama(model=LLM_model,temperature=temperature/100,verbose=True, reasoning=True, validate_model_on_init=True,num_predict=1028).bind_tools(self.tools_list)
+
+                    first_step = RunnableLambda(lambda x : self.llm.invoke(x))
+                    tool_step = RunnableLambda(lambda x : Calculate_tools(x,self.messagess,self.tools_list))
+                    tool_invoke_step = RunnableLambda(lambda x : self.llm.invoke(x) if x != None else x[-1])
+                    append_step = RunnableLambda(lambda x: self.messagess.append(x))
+                    output_step = RunnableLambda(lambda x : self.messagess[-1].content)
+
+                    self.chain = first_step | tool_step | tool_invoke_step | append_step |output_step
+
     def send(self):
+        self.edit.setDisabled(True)
         text = self.edit.text()
         self.messages.addWidget(Message(text,self.User_color.name(),self.Text_color.name(),self.font_size, self.font),self.i,0)
         self.i+=1
 
         self.prompt["messages"].append({"role":"user", "content": text})
+        self.edit.setText("")
 
+        self.thrd = threading.Thread(target=self.generate, args=(text,))
+        self.thrd.start()
+
+    def generate(self,text):
         try:
             self.messagess.append(HumanMessage(text))
             output = self.chain.invoke(self.messagess)
 
             self.prompt["messages"].append({"role":"system", "content": output})
-            self.messages.addWidget(Message(output,self.AI_color.name(),self.Text_color.name(),self.font_size, self.font),self.i,1)
-            self.i+=1
         except:
-            self.messages.addWidget(Message("Error",self.AI_color.name(),self.Text_color.name(),self.font_size, self.font),self.i,1)
-            self.i+=1
-        
-        self.edit.setText("")
+            output = "Error"
+
+        self.edit.setDisabled(False)
+        self.Mes_Sig.emit(output)
+
+    @Slot(str)
+    def add_message(self,output : str):
+        self.messages.addWidget(Message(output,self.AI_color.name(),self.Text_color.name(),self.font_size, self.font),self.i,1)
+        self.i+=1
 
 app = QApplication()
 m = MainWindow()

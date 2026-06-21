@@ -1,3 +1,5 @@
 .venv
 .venv2
 Tools/__pycache__
+settings.json
+Custom_prompt.txt
