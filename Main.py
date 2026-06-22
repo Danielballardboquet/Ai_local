@@ -1,12 +1,8 @@
-import wikipedia
-from langchain import agents,tools
-from langchain_core.runnables import RunnableLambda, RunnableSequence
+from langchain_core.runnables import RunnableLambda
 from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage,AIMessage
-from langchain_community.tools import ReadFileTool, YouTubeSearchTool
 from langchain_community.tools.wikipedia.tool import *
 from langchain_community.agent_toolkits.steam.toolkit import SteamToolkit 
-from typing import List, Dict
 from PySide6.QtWidgets import *
 from PySide6.QtCore import Qt, Slot, Signal
 from PySide6.QtGui import QAction, QColor, QMouseEvent, QClipboard,QGuiApplication
@@ -15,7 +11,7 @@ from Tools.Tools import Tools
 import json
 import threading
 import os
-import subprocess
+
 
 def Calculate_tools(m :AIMessage, messages,t):
     if m.tool_calls != None:
@@ -37,15 +33,16 @@ class Message(QLabel):
         self.setWordWrap(True)
         self.setSizePolicy(QSizePolicy.Preferred,QSizePolicy.Fixed)
         self.clip = QGuiApplication.clipboard()
-        self.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.setTextInteractionFlags(Qt.TextSelectableByMouse |Qt.TextInteractionFlag.LinksAccessibleByMouse)
 
     def mousePressEvent(self, ev: QMouseEvent ):
         if ev.button() == Qt.RightButton:
             self.clip.setText(self.text())
 
 class LLM_Menu(QDialog):
-    def __init__(self):
+    def __init__(self, model_name: str):
         super().__init__()
+        self.setWindowTitle("LLM preferences")
         self.apply = False
         self.grid = QGridLayout()
         self.setLayout(self.grid)
@@ -54,9 +51,13 @@ class LLM_Menu(QDialog):
                        "deepseek-r1:7b",
                        "deepseek-r1:8b",
                        "deepseek-r1:14b",
-                       "deepseek-r1:32b"]
+                       "deepseek-r1:32b",
+                       "qwen3.5:27b",
+                       "gemma4:e4b"]
+        
         self.combo = QComboBox()
         self.combo.addItems(self.models)
+        self.combo.setCurrentText(model_name)
 
         self.temperature = QSpinBox()
         self.temperature.setMaximum(100)
@@ -225,7 +226,6 @@ class MainWindow(QMainWindow):
 
         self.i = 0
         self.settings = {}
-        self.model = "gemma4:e4b"
         self.Tools = Tools
 
         self.Mes_Sig.connect(self.add_message)
@@ -278,9 +278,10 @@ class MainWindow(QMainWindow):
                 self.Text_color = QColor(settings["text_color"])
                 self.font = settings["font"]
                 self.font_size = settings["font_size"]
+                self.model = settings["model"]
         except:
             settings = {}
-
+            self.model = "gemma4:e4b"
             self.AI_color = QColor(255,0,0)
             self.User_color = QColor(0,0,255)
             self.Text_color = QColor(0,0,0)
@@ -293,6 +294,8 @@ class MainWindow(QMainWindow):
         self.settings["font"] = self.font
         self.settings["font_size"] = self.font_size
         self.settings["AI_color"] = self.AI_color.name()
+        self.settings["model"] = self.model
+
         with open("settings.json", "w") as f:
             print(f.write(json.dumps(self.settings)))
 
