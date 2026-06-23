@@ -1,9 +1,11 @@
 from langchain_community.tools import ReadFileTool, YouTubeSearchTool, FileSearchTool, CopyFileTool, MoveFileTool, DeleteFileTool, playwright
 from langchain_community.tools.wikipedia.tool import *
 from langchain_community.tools.shell.tool import ShellTool
+from langchain.tools import tool
 import wikipedia
 import json
 from langchain_community.tools.file_management import ReadFileTool, WriteFileTool
+import requests
 
 email = "danielballardboquet01@gmail.com"
 
@@ -13,7 +15,7 @@ api_wrapper = WikipediaAPIWrapper(
     top_k_results=1,
     doc_content_chars_max=1000
 )
-
+    
 Tools = [
         {"Tool_name": "Wikipedia Tool", "Tool": WikipediaQueryRun(api_wrapper=api_wrapper), "Active": True},
         {"Tool_name": "Youtube Search", "Tool": YouTubeSearchTool(description="search for youtube videos associ" "the input to this tool should be" "the first part contains a person" "number that is the maximum numbe" "to return aka num_results. the s" "The links to the videos must be in markdown pattern: [link text](http://example.com)"), "Active": True},

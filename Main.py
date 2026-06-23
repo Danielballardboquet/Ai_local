@@ -5,7 +5,7 @@ from langchain_community.tools.wikipedia.tool import *
 from langchain_community.agent_toolkits.steam.toolkit import SteamToolkit 
 from PySide6.QtWidgets import *
 from PySide6.QtCore import Qt, Slot, Signal
-from PySide6.QtGui import QAction, QColor, QMouseEvent, QClipboard,QGuiApplication
+from PySide6.QtGui import QAction, QColor, QMouseEvent, QClipboard,QGuiApplication, QFont
 from markdown2 import markdown
 from Tools.Tools import Tools
 import json
@@ -34,6 +34,7 @@ class Message(QLabel):
         self.setSizePolicy(QSizePolicy.Preferred,QSizePolicy.Fixed)
         self.clip = QGuiApplication.clipboard()
         self.setTextInteractionFlags(Qt.TextSelectableByMouse |Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        self.setOpenExternalLinks(True)
 
     def mousePressEvent(self, ev: QMouseEvent ):
         if ev.button() == Qt.RightButton:
@@ -117,12 +118,13 @@ class Menu(QDialog):
         self.AI_label = QLabel("AI color")
         self.User_label = QLabel("User Color")
 
-        self.font = QFontComboBox()
+        self.f = QFontComboBox()
         self.AI_color_b = QPushButton()
         self.User_color_b = QPushButton()
         self.wText_color = QPushButton()
         self.wfont_size = QSpinBox()
         self.wfont_size.setValue(self.Font_size)
+        self.f.setCurrentFont(QFont(self.bFont))
 
         self.AI_color_b.setStyleSheet(f"background-color: {AI_color.name()}")
         self.User_color_b.setStyleSheet(f"background-color: {User_color.name()}")
@@ -132,7 +134,7 @@ class Menu(QDialog):
         self.cancel = QPushButton("Cancel")
 
         self.lay.addWidget(self.font_label,0,0)
-        self.lay.addWidget(self.font,0,1)
+        self.lay.addWidget(self.f,0,1)
         self.lay.addWidget(self.wfont_size,0,2)
         self.lay.addWidget(self.wText_color,0,3)
 
@@ -174,7 +176,7 @@ class Menu(QDialog):
     def exec(self):
         super().exec()
         if self.apply_bool:
-            return self.Font_size, self.Font, self.AI_color, self.User_color, self.Text_color
+            return self.wfont_size.value(), self.f.currentFont().family(), self.AI_color, self.User_color, self.Text_color
         
         return self.wfont_size.value(), self.bFont, self.bAI_color, self.bUser_color, self.bText_color
 
@@ -219,6 +221,7 @@ class Tool_menu(QDialog):
             return self.tools
         
 class MainWindow(QMainWindow):
+    
     Mes_Sig = Signal(str)
     
     def __init__(self):
@@ -237,6 +240,8 @@ class MainWindow(QMainWindow):
         self.create_widgets()
 
         self.setWindowTitle("Ai Chatting")
+
+        self.qfont = QFont(self.font,self.font_size)
 
         #Tools and prompts
 
@@ -285,7 +290,7 @@ class MainWindow(QMainWindow):
             self.AI_color = QColor(255,0,0)
             self.User_color = QColor(0,0,255)
             self.Text_color = QColor(0,0,0)
-            self.font = ""
+            self.font = "Segoe UI"
             self.font_size = 12
 
     def closeEvent(self, event):
@@ -365,18 +370,23 @@ class MainWindow(QMainWindow):
          
     def Color_settings(self):
 
-        m = Menu(24,self.font,self.AI_color,self.User_color,self.Text_color)
-        self.font_size, self.font , self.AI_color, self.User_color, self.Text_color = m.exec()
+        m = Menu(self.font_size,self.font,self.AI_color,self.User_color,self.Text_color)
+        self.font_size, self.fnt , self.AI_color, self.User_color, self.Text_color = m.exec()
         count = self.messages.rowCount()
         k = 0
+        self.font = self.fnt
+        self.qfont = QFont(self.font,self.font_size)
+        print("Hello:",self.font_size)
         for i in range(count):
             if k == 0:
                 widget = self.messages.itemAtPosition(i,0).widget()
                 widget.setStyleSheet(f"background-color:{self.User_color.name()}; color: {self.Text_color.name()}; font-size: {self.font_size}; border-radius:10px; padding:20px")
+                widget.setFont(self.qfont)
 
             if k == 1:
                 widget = self.messages.itemAtPosition(i,1).widget()
                 widget.setStyleSheet(f"background-color:{self.AI_color.name()};color: {self.Text_color.name()}; font-size: {self.font_size}; border-radius:10px; padding:20px")
+                widget.setFont(self.qfont)
 
             k += 1
             k = k%2
@@ -386,7 +396,7 @@ class MainWindow(QMainWindow):
         self.i = 0
 
     def LLM_settings(self):
-        menu = LLM_Menu()
+        menu = LLM_Menu(self.model)
         LLM_model, temperature = menu.exec()
 
         if LLM_model != None and temperature != None:
@@ -424,8 +434,14 @@ class MainWindow(QMainWindow):
     def send(self):
         self.edit.setDisabled(True)
         text = self.edit.text()
-        self.messages.addWidget(Message(text,self.User_color.name(),self.Text_color.name(),self.font_size, self.font),self.i,0)
+        mes = Message(text,self.User_color.name(),self.Text_color.name(),self.font_size, self.font)
+        mes.setFont(self.qfont)
+        self.messages.addWidget(mes,self.i,0)
         self.i+=1
+
+        self.s = self.scr.verticalScrollBar()
+        max = self.s.maximum()
+        self.s.setValue(max)
 
         self.prompt["messages"].append({"role":"user", "content": text})
         self.edit.setText("")
@@ -434,14 +450,15 @@ class MainWindow(QMainWindow):
         self.thrd.start()
 
     def generate(self,text):
-        try:
-            while True:
-                self.messagess.append(HumanMessage(text))
-                output = self.chain.invoke(self.messagess)
+        while True:
+            self.messagess.append(HumanMessage(text))
+            output = self.chain.invoke(self.messagess)
 
-                self.prompt["messages"].append({"role":"system", "content": output})
-                if output != "":
-                    break
+            self.prompt["messages"].append({"role":"system", "content": output})
+            if output != "":
+                break
+        try:
+            None
         except:
             output = "Error"
 
@@ -502,8 +519,14 @@ class MainWindow(QMainWindow):
     
     @Slot(str)
     def add_message(self,output : str):
-        self.messages.addWidget(Message(output,self.AI_color.name(),self.Text_color.name(),self.font_size, self.font),self.i,1)
+        mes = Message(output,self.AI_color.name(),self.Text_color.name(),self.font_size, self.font)
+        mes.setFont(self.qfont)
+        self.messages.addWidget(mes,self.i,1)
         self.i+=1
+
+        self.s = self.scr.verticalScrollBar()
+        max = self.s.maximum()
+        self.s.setValue(max)
 
 app = QApplication()
 m = MainWindow()
